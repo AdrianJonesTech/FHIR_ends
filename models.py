@@ -29,12 +29,6 @@ class Patient(BaseModel):
     birthDate: Optional[date] = Field(None, description="Birth date")
     gender: Optional[str] = Field(None, description="male | female | other | unknown")
 
-    class Config:
-        # Enable ORM mode for potential DB integration
-        from_attributes = True
-        # FHIR uses snake_case internally sometimes, but we use camelCase for JSON
-        populate_by_name = True
-
     model_config = {
         "from_attributes": True,
         "populate_by_name": True

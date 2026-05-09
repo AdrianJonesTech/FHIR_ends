@@ -18,6 +18,22 @@ uv sync
 
 This installs dependencies from `pyproject.toml` and `uv.lock` into `.venv`.
 
+## Database
+
+The project uses PostgreSQL. You can run it via Docker Compose:
+
+```bash
+docker-compose up -d
+```
+
+## Seeding Data
+
+To populate the database with sample patient data, run:
+
+```bash
+uv run python seed.py
+```
+
 ## Running the server
 
 ```bash
