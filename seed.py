@@ -1,19 +1,13 @@
 from datetime import date
 from sqlalchemy.orm import Session
 from database import SessionLocal, engine, Base
-from models import DBPatient
+from models import DBPatient, DBPractitioner
 
 def seed_data():
-    # Create tables if they don't exist
     Base.metadata.create_all(bind=engine)
     
     db: Session = SessionLocal()
     try:
-        # Check if we already have data
-        if db.query(DBPatient).count() > 0:
-            print("Database already has data. Skipping seeding.")
-            return
-
         print("Seeding database...")
         patients = [
             DBPatient(
@@ -39,9 +33,44 @@ def seed_data():
             )
         ]
         
-        db.add_all(patients)
+        added_patients = 0
+        for p in patients:
+            if not db.query(DBPatient).filter(DBPatient.id == p.id).first():
+                db.add(p)
+                added_patients += 1
+        
         db.commit()
-        print(f"Successfully added {len(patients)} patients.")
+        if added_patients > 0:
+            print(f"Successfully added {added_patients} new patients.")
+        else:
+            print("No new patients to add.")
+
+        practitioners = [
+            DBPractitioner(
+                id="practitioner-1",
+                resourceType="Practitioner",
+                gender="female",
+                name=[{"family": "Wilson", "given": ["Alice"]}]
+            ),
+            DBPractitioner(
+                id="practitioner-2",
+                resourceType="Practitioner",
+                gender="male",
+                name=[{"family": "Brown", "given": ["Bob"]}]
+            )
+        ]
+        
+        added_practitioners = 0
+        for p in practitioners:
+            if not db.query(DBPractitioner).filter(DBPractitioner.id == p.id).first():
+                db.add(p)
+                added_practitioners += 1
+        
+        db.commit()
+        if added_practitioners > 0:
+            print(f"Successfully added {added_practitioners} new practitioners.")
+        else:
+            print("No new practitioners to add.")
     except Exception as e:
         print(f"Error seeding data: {e}")
         db.rollback()

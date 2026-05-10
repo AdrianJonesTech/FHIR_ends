@@ -3,9 +3,18 @@ name = "fhir-ends"
 version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
-    "fastapi==0.115.0",
+    "fastapi==0.136.1",
     "psycopg2-binary>=2.9.12",
-    "pydantic==2.9.2",
+    "pydantic==2.13.4",
     "sqlalchemy>=2.0.49",
-    "uvicorn[standard]==0.32.0",
+    "uvicorn[standard]==0.46.0",
 ]
+
+[dependency-groups]
+dev = [
+    "pylint>=3.3.0",
+    "ruff>=0.9.0",
+]
+
+[tool.pylint.main]
+ignore = [".venv"]
