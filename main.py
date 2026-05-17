@@ -1,8 +1,13 @@
-from fastapi import FastAPI, HTTPException, Path, Depends
-from fastapi.responses import RedirectResponse
-from typing import List
+from fastapi import FastAPI, HTTPException, Path, Depends, Query
+from fastapi.responses import RedirectResponse, JSONResponse
+from typing import List, Optional
 from sqlalchemy.orm import Session
-from models import Patient, DBPatient, Practitioner, DBPractitioner
+from sqlalchemy import or_
+from datetime import datetime
+from models import (
+    Patient, DBPatient, Practitioner, DBPractitioner,
+    CapabilityStatement, Bundle, BundleEntry, OperationOutcome, OperationOutcomeIssue
+)
 from database import engine, Base, get_db
 
 # Create tables
@@ -21,13 +26,60 @@ async def root():
     return RedirectResponse(url="/docs")
 
 
+@app.get("/fhir/metadata", response_model=CapabilityStatement)
+async def get_metadata() -> CapabilityStatement:
+    """Retrieve the FHIR CapabilityStatement."""
+    return CapabilityStatement(
+        date=datetime.now().date(),
+        rest=[{
+            "mode": "server",
+            "resource": [
+                {
+                    "type": "Patient",
+                    "interaction": [
+                        {"code": "read"},
+                        {"code": "update"},
+                        {"code": "delete"},
+                        {"code": "create"},
+                        {"code": "search-type"}
+                    ],
+                    "searchParam": [
+                        {"name": "name", "type": "string", "documentation": "Search by any name component"},
+                        {"name": "family", "type": "string", "documentation": "Search by family name"},
+                        {"name": "given", "type": "string", "documentation": "Search by given name"},
+                        {"name": "gender", "type": "token", "documentation": "Search by gender"}
+                    ]
+                },
+                {
+                    "type": "Practitioner",
+                    "interaction": [
+                        {"code": "read"},
+                        {"code": "update"},
+                        {"code": "delete"},
+                        {"code": "create"},
+                        {"code": "search-type"}
+                    ]
+                }
+            ]
+        }]
+    )
+
+
+def fhir_error(status_code: int, severity: str, code: str, diagnostics: str):
+    """Return a FHIR-compliant OperationOutcome error response."""
+    outcome = OperationOutcome(
+        issue=[OperationOutcomeIssue(severity=severity, code=code, diagnostics=diagnostics)]
+    )
+    return JSONResponse(status_code=status_code, content=outcome.model_dump())
+
+
 @app.post("/fhir/Patient", response_model=Patient, status_code=201)
-async def create_patient(patient: Patient, db: Session = Depends(get_db)) -> Patient:
+async def create_patient(patient: Patient, db: Session = Depends(get_db)):
     """Create a new Patient resource."""
     if patient.id:
         db_patient = db.query(DBPatient).filter(DBPatient.id == patient.id).first()
         if db_patient:
-            raise HTTPException(status_code=409, detail="Patient with this ID already exists")
+            return fhir_error(409, "error", "duplicate", f"Patient with ID {patient.id} already exists")
     else:
         db_count = db.query(DBPatient).count()
         patient.id = f"patient-{db_count + 1}"
@@ -45,11 +97,45 @@ async def create_patient(patient: Patient, db: Session = Depends(get_db)) -> Pat
     return patient
 
 
-@app.get("/fhir/Patient", response_model=List[Patient])
-async def search_patients(db: Session = Depends(get_db)) -> List[Patient]:
-    """Search/retrieve all Patients."""
-    db_patients = db.query(DBPatient).all()
-    return [Patient.model_validate(p) for p in db_patients]
+@app.get("/fhir/Patient", response_model=Bundle)
+async def search_patients(
+    db: Session = Depends(get_db),
+    name: Optional[str] = Query(None),
+    family: Optional[str] = Query(None),
+    given: Optional[str] = Query(None),
+    gender: Optional[str] = Query(None)
+) -> Bundle:
+    """Search Patients using standard FHIR parameters."""
+    query = db.query(DBPatient)
+
+    if gender:
+        query = query.filter(DBPatient.gender == gender.lower())
+
+    # Fetch all and filter in Python for demo simplicity
+    db_patients = query.all()
+    results = [Patient.model_validate(p) for p in db_patients]
+
+    if name:
+        name = name.lower()
+        results = [
+            p for p in results 
+            if any(name in (n.family or "").lower() for n in p.name) or 
+               any(any(name in g.lower() for g in n.given) for n in p.name)
+        ]
+    
+    if family:
+        family = family.lower()
+        results = [p for p in results if any(family in (n.family or "").lower() for n in p.name)]
+
+    if given:
+        given = given.lower()
+        results = [p for p in results if any(any(given in g.lower() for g in n.given) for n in p.name)]
+
+    entries = [
+        BundleEntry(resource=p.model_dump(exclude_none=True), fullUrl=f"/fhir/Patient/{p.id}") 
+        for p in results
+    ]
+    return Bundle(total=len(results), entry=entries)
 
 
 @app.get("/fhir/Patient/{patient_id}", response_model=Patient)
@@ -61,7 +147,7 @@ async def read_patient(
     db_patient = db.query(DBPatient).filter(DBPatient.id == patient_id).first()
     if db_patient:
         return Patient.model_validate(db_patient)
-    raise HTTPException(status_code=404, detail="Patient not found")
+    return fhir_error(404, "error", "not-found", f"Patient {patient_id} not found")
 
 
 @app.put("/fhir/Patient/{patient_id}", response_model=Patient)
@@ -76,7 +162,7 @@ async def update_patient(
 
     db_patient = db.query(DBPatient).filter(DBPatient.id == patient_id).first()
     if not db_patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
+        return fhir_error(404, "error", "not-found", f"Patient {patient_id} not found")
 
     db_patient.birthDate = patient.birthDate
     db_patient.gender = patient.gender
@@ -95,7 +181,7 @@ async def delete_patient(
     """Delete a Patient resource."""
     db_patient = db.query(DBPatient).filter(DBPatient.id == patient_id).first()
     if not db_patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
+        return fhir_error(404, "error", "not-found", f"Patient {patient_id} not found")
 
     db.delete(db_patient)
     db.commit()
@@ -105,12 +191,12 @@ async def delete_patient(
 # Practitioner endpoints
 
 @app.post("/fhir/Practitioner", response_model=Practitioner, status_code=201)
-async def create_practitioner(practitioner: Practitioner, db: Session = Depends(get_db)) -> Practitioner:
+async def create_practitioner(practitioner: Practitioner, db: Session = Depends(get_db)):
     """Create a new Practitioner resource."""
     if practitioner.id:
         db_practitioner = db.query(DBPractitioner).filter(DBPractitioner.id == practitioner.id).first()
         if db_practitioner:
-            raise HTTPException(status_code=409, detail="Practitioner with this ID already exists")
+            return fhir_error(409, "error", "duplicate", f"Practitioner with ID {practitioner.id} already exists")
     else:
         db_count = db.query(DBPractitioner).count()
         practitioner.id = f"practitioner-{db_count + 1}"
@@ -127,10 +213,16 @@ async def create_practitioner(practitioner: Practitioner, db: Session = Depends(
     return practitioner
 
 
-@app.get("/fhir/Practitioner", response_model=List[Practitioner])
-async def search_practitioners(db: Session = Depends(get_db)) -> List[Practitioner]:
+@app.get("/fhir/Practitioner", response_model=Bundle)
+async def search_practitioners(db: Session = Depends(get_db)) -> Bundle:
     """Search/retrieve all Practitioners."""
-    return [Practitioner.model_validate(p) for p in db.query(DBPractitioner).all()]
+    db_practitioners = db.query(DBPractitioner).all()
+    results = [Practitioner.model_validate(p) for p in db_practitioners]
+    entries = [
+        BundleEntry(resource=p.model_dump(exclude_none=True), fullUrl=f"/fhir/Practitioner/{p.id}") 
+        for p in results
+    ]
+    return Bundle(total=len(results), entry=entries)
 
 
 @app.get("/fhir/Practitioner/{practitioner_id}", response_model=Practitioner)
@@ -142,7 +234,7 @@ async def read_practitioner(
     db_practitioner = db.query(DBPractitioner).filter(DBPractitioner.id == practitioner_id).first()
     if db_practitioner:
         return Practitioner.model_validate(db_practitioner)
-    raise HTTPException(status_code=404, detail="Practitioner not found")
+    return fhir_error(404, "error", "not-found", f"Practitioner {practitioner_id} not found")
 
 
 @app.put("/fhir/Practitioner/{practitioner_id}", response_model=Practitioner)
@@ -157,7 +249,7 @@ async def update_practitioner(
 
     db_practitioner = db.query(DBPractitioner).filter(DBPractitioner.id == practitioner_id).first()
     if not db_practitioner:
-        raise HTTPException(status_code=404, detail="Practitioner not found")
+        return fhir_error(404, "error", "not-found", f"Practitioner {practitioner_id} not found")
 
     db_practitioner.gender = practitioner.gender
     db_practitioner.name = [n.model_dump() for n in practitioner.name]
@@ -175,7 +267,7 @@ async def delete_practitioner(
     """Delete a Practitioner resource."""
     db_practitioner = db.query(DBPractitioner).filter(DBPractitioner.id == practitioner_id).first()
     if not db_practitioner:
-        raise HTTPException(status_code=404, detail="Practitioner not found")
+        return fhir_error(404, "error", "not-found", f"Practitioner {practitioner_id} not found")
 
     db.delete(db_practitioner)
     db.commit()

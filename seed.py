@@ -30,6 +30,20 @@ def seed_data():
                 birthDate=date(1955, 11, 3),
                 gender="other",
                 name=[{"family": "Jones", "given": ["Alex"]}]
+            ),
+            DBPatient(
+                id="patient-4",
+                resourceType="Patient",
+                birthDate=date(2000, 1, 1),
+                gender="male",
+                name=[{"family": "Smith", "given": ["Robert"]}]
+            ),
+            DBPatient(
+                id="patient-5",
+                resourceType="Patient",
+                birthDate=date(1985, 6, 15),
+                gender="female",
+                name=[{"family": "Johnson", "given": ["Emily"]}]
             )
         ]
         
