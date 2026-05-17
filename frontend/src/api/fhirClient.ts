@@ -22,9 +22,36 @@ export interface Patient {
   gender?: string;
 }
 
+export interface Observation {
+  resourceType: 'Observation';
+  id: string;
+  status: string;
+  category?: any[];
+  code: {
+    coding: {
+      system?: string;
+      code?: string;
+      display?: string;
+    }[];
+    text?: string;
+  };
+  subject: {
+    reference: string;
+  };
+  effectiveDateTime?: string;
+  valueQuantity?: {
+    value: number;
+    unit?: string;
+    system?: string;
+    code?: string;
+  };
+  valueCodeableConcept?: any;
+  valueString?: string;
+}
+
 export interface BundleEntry {
   fullUrl?: string;
-  resource: Patient;
+  resource: any; // Can be Patient or Observation
 }
 
 export interface Bundle {
@@ -41,6 +68,13 @@ export const getPatients = async (params?: any) => {
 
 export const getPatient = async (id: string) => {
   const response = await fhirClient.get<Patient>(`/fhir/Patient/${id}`);
+  return response.data;
+};
+
+export const getObservations = async (patientId: string) => {
+  const response = await fhirClient.get<Bundle>(`/fhir/Observation`, {
+    params: { patient: patientId }
+  });
   return response.data;
 };
 
