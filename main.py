@@ -1,11 +1,13 @@
 from fastapi import FastAPI, HTTPException, Path, Depends, Query
 from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import datetime
 from models import (
     Patient, DBPatient, Practitioner, DBPractitioner,
+    Observation, DBObservation,
     CapabilityStatement, Bundle, BundleEntry, OperationOutcome, OperationOutcomeIssue
 )
 from database import engine, Base, get_db
@@ -17,6 +19,15 @@ app = FastAPI(
     title="Digital Healthcare FHIR Backend Stub",
     description="Stub endpoints for FHIR Patient and Practitioner integration",
     version="0.1.0"
+)
+
+# Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, specify the allowed origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
@@ -48,6 +59,17 @@ async def get_metadata() -> CapabilityStatement:
                         {"name": "family", "type": "string", "documentation": "Search by family name"},
                         {"name": "given", "type": "string", "documentation": "Search by given name"},
                         {"name": "gender", "type": "token", "documentation": "Search by gender"}
+                    ]
+                },
+                {
+                    "type": "Observation",
+                    "interaction": [
+                        {"code": "read"},
+                        {"code": "search-type"}
+                    ],
+                    "searchParam": [
+                        {"name": "patient", "type": "reference", "documentation": "The subject that the observation is about"},
+                        {"name": "category", "type": "token", "documentation": "The category of the observation"}
                     ]
                 },
                 {
@@ -171,6 +193,87 @@ async def update_patient(
     db.commit()
     db.refresh(db_patient)
     return Patient.model_validate(db_patient)
+
+
+@app.get("/fhir/Observation", response_model=Bundle)
+async def search_observations(
+    patient: Optional[str] = Query(None, description="Patient ID (e.g. Patient/patient-1 or patient-1)"),
+    category: Optional[str] = Query(None, description="Search by category code (e.g. vital-signs)"),
+    db: Session = Depends(get_db)
+) -> Bundle:
+    """Search for Observation resources."""
+    query = db.query(DBObservation)
+
+    if patient:
+        # Handle both "patient-1" and "Patient/patient-1"
+        p_id = patient.replace("Patient/", "")
+        query = query.filter(DBObservation.subject_id == p_id)
+
+    observations = query.all()
+
+    # Filter by category code in the JSON category field
+    if category:
+        filtered_obs = []
+        for obs in observations:
+            if obs.category:
+                match = False
+                for cat in obs.category:
+                    for coding in cat.get("coding", []):
+                        if coding.get("code") == category:
+                            match = True
+                            break
+                    if match:
+                        break
+                if match:
+                    filtered_obs.append(obs)
+        observations = filtered_obs
+    
+    entries = []
+    for obs in observations:
+        # Convert DB model to FHIR-like dict
+        obs_dict = {
+            "resourceType": "Observation",
+            "id": obs.id,
+            "status": obs.status,
+            "category": obs.category,
+            "code": obs.code,
+            "subject": {"reference": f"Patient/{obs.subject_id}"},
+            "effectiveDateTime": obs.effectiveDateTime,
+            "valueQuantity": obs.valueQuantity,
+            "valueCodeableConcept": obs.valueCodeableConcept,
+            "valueString": obs.valueString
+        }
+        entries.append(BundleEntry(
+            fullUrl=f"http://localhost:8000/fhir/Observation/{obs.id}",
+            resource=obs_dict
+        ))
+
+    return Bundle(
+        total=len(entries),
+        entry=entries
+    )
+
+
+@app.get("/fhir/Observation/{observation_id}", response_model=Observation)
+async def read_observation(
+    observation_id: str = Path(..., description="Logical ID"),
+    db: Session = Depends(get_db)
+) -> Observation:
+    """Retrieve an Observation by ID."""
+    obs = db.query(DBObservation).filter(DBObservation.id == observation_id).first()
+    if obs:
+        return Observation(
+            id=obs.id,
+            status=obs.status,
+            category=obs.category,
+            code=obs.code,
+            subject={"reference": f"Patient/{obs.subject_id}"},
+            effectiveDateTime=obs.effectiveDateTime,
+            valueQuantity=obs.valueQuantity,
+            valueCodeableConcept=obs.valueCodeableConcept,
+            valueString=obs.valueString
+        )
+    return fhir_error(404, "error", "not-found", f"Observation {observation_id} not found")
 
 
 @app.delete("/fhir/Patient/{patient_id}", status_code=204)

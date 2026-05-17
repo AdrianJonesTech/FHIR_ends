@@ -18,6 +18,34 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/fhir_db
     depends_on:
       - db
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          ignore:
+            - .venv/
+            - __pycache__/
+            - .git/
+        - action: sync+restart
+          path: pyproject.toml
+          target: /app/pyproject.toml
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - app
+    develop:
+      watch:
+        - action: sync
+          path: ./frontend
+          target: /app
+          ignore:
+            - ./frontend/node_modules/
+        - action: rebuild
+          path: ./frontend/package.json
 
 volumes:
   postgres_data:
