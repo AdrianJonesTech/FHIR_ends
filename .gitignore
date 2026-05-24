@@ -11,3 +11,4 @@ ENV/
 .coverage
 htmlcov/
 .uv
+.env

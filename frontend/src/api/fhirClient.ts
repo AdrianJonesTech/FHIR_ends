@@ -61,6 +61,29 @@ export interface Bundle {
   entry: BundleEntry[];
 }
 
+export interface Coverage {
+  resourceType: 'Coverage';
+  id: string;
+  status: string;
+  type?: any;
+  beneficiary: { reference: string };
+  payor: any[];
+}
+
+export interface ExplanationOfBenefit {
+  resourceType: 'ExplanationOfBenefit';
+  id: string;
+  status: string;
+  type: any;
+  use: string;
+  patient: { reference: string };
+  created: string;
+  insurer: any;
+  provider: any;
+  outcome: string;
+  total?: any[];
+}
+
 export const getPatients = async (params?: any) => {
   const response = await fhirClient.get<Bundle>('/fhir/Patient', { params });
   return response.data;
@@ -75,6 +98,25 @@ export const getObservations = async (patientId: string) => {
   const response = await fhirClient.get<Bundle>(`/fhir/Observation`, {
     params: { patient: patientId }
   });
+  return response.data;
+};
+
+export const getCoverages = async (patientId: string) => {
+  const response = await fhirClient.get<Bundle>(`/fhir/Coverage`, {
+    params: { beneficiary: patientId }
+  });
+  return response.data;
+};
+
+export const getEOBs = async (patientId: string) => {
+  const response = await fhirClient.get<Bundle>(`/fhir/ExplanationOfBenefit`, {
+    params: { patient: patientId }
+  });
+  return response.data;
+};
+
+export const initiateBlueButtonLogin = async () => {
+  const response = await fhirClient.get<{ url: string }>('/api/oauth/login');
   return response.data;
 };
 

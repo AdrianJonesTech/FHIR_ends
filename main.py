@@ -1,19 +1,35 @@
 from fastapi import FastAPI, HTTPException, Path, Depends, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+import httpx
+import secrets
+import hashlib
+import base64
+import urllib.parse
+import os
 from typing import List, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import or_
 from datetime import datetime
 from models import (
     Patient, DBPatient, Practitioner, DBPractitioner,
-    Observation, DBObservation,
+    Observation, DBObservation, Coverage, ExplanationOfBenefit,
     CapabilityStatement, Bundle, BundleEntry, OperationOutcome, OperationOutcomeIssue
 )
 from database import engine, Base, get_db
 
 # Create tables
 Base.metadata.create_all(bind=engine)
+
+# Blue Button 2.0 Configuration (Sandbox)
+BLUEBUTTON_CLIENT_ID = os.getenv("BLUEBUTTON_CLIENT_ID", "")
+BLUEBUTTON_CLIENT_SECRET = os.getenv("BLUEBUTTON_CLIENT_SECRET", "")
+BLUEBUTTON_AUTH_URL = "https://sandbox.bluebutton.cms.gov/v2/o/authorize"
+BLUEBUTTON_TOKEN_URL = "https://sandbox.bluebutton.cms.gov/v2/o/token"
+BLUEBUTTON_CALLBACK_URL = "http://localhost:8000/api/oauth/callback/"
+
+# In-memory store for PKCE verifiers and states (use a proper session/cache in production)
+oauth_state_store = {}
 
 app = FastAPI(
     title="Digital Healthcare FHIR Backend Stub",
@@ -73,6 +89,26 @@ async def get_metadata() -> CapabilityStatement:
                     ]
                 },
                 {
+                    "type": "Coverage",
+                    "interaction": [
+                        {"code": "read"},
+                        {"code": "search-type"}
+                    ],
+                    "searchParam": [
+                        {"name": "beneficiary", "type": "reference", "documentation": "The beneficiary of the coverage"}
+                    ]
+                },
+                {
+                    "type": "ExplanationOfBenefit",
+                    "interaction": [
+                        {"code": "read"},
+                        {"code": "search-type"}
+                    ],
+                    "searchParam": [
+                        {"name": "patient", "type": "reference", "documentation": "The patient of the EOB"}
+                    ]
+                },
+                {
                     "type": "Practitioner",
                     "interaction": [
                         {"code": "read"},
@@ -85,6 +121,105 @@ async def get_metadata() -> CapabilityStatement:
             ]
         }]
     )
+
+
+# OAuth 2.0 Endpoints for Blue Button 2.0 Integration
+
+@app.get("/api/diagnostic")
+async def diagnostic():
+    """Diagnostic endpoint to check configuration status."""
+    return {
+        "bluebutton_client_id_set": bool(BLUEBUTTON_CLIENT_ID),
+        "bluebutton_client_secret_set": bool(BLUEBUTTON_CLIENT_SECRET),
+        "database_url_configured": "postgres" in os.getenv("DATABASE_URL", ""),
+        "callback_url": BLUEBUTTON_CALLBACK_URL
+    }
+
+
+@app.get("/api/oauth/login")
+async def oauth_login():
+    """Initiate Blue Button 2.0 OAuth flow."""
+    state = secrets.token_urlsafe(32)
+    
+    # PKCE Implementation
+    code_verifier = secrets.token_urlsafe(64)
+    code_challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(code_verifier.encode('ascii')).digest()
+    ).decode('ascii').rstrip('=')
+    
+    # Store state and verifier to verify them later
+    oauth_state_store[state] = {
+        "code_verifier": code_verifier,
+        "created_at": datetime.now()
+    }
+    
+    params = {
+        "response_type": "code",
+        "client_id": BLUEBUTTON_CLIENT_ID,
+        "redirect_uri": BLUEBUTTON_CALLBACK_URL,
+        "state": state,
+        "scope": "patient/Patient.rs patient/Coverage.rs patient/ExplanationOfBenefit.rs profile openid",
+        "code_challenge": code_challenge,
+        "code_challenge_method": "S256"
+    }
+    
+    auth_url = f"{BLUEBUTTON_AUTH_URL}?{urllib.parse.urlencode(params)}"
+    return {"url": auth_url}
+
+
+@app.get("/api/oauth/callback/")
+async def oauth_callback(code: Optional[str] = Query(None), state: Optional[str] = Query(None), error: Optional[str] = Query(None)):
+    """Handle OAuth callback and exchange code for access token."""
+    if error:
+        print(f"OAuth error from provider: {error}")
+        return RedirectResponse(url=f"http://localhost:3000/dashboard?status=error&message={urllib.parse.quote(error)}")
+
+    if not code or not state:
+        return RedirectResponse(url="http://localhost:3000/dashboard?status=error&message=Missing+required+parameters")
+
+    if state not in oauth_state_store:
+        return RedirectResponse(url="http://localhost:3000/dashboard?status=error&message=Invalid+state")
+    
+    stored_data = oauth_state_store[state]
+    code_verifier = stored_data.get("code_verifier")
+    
+    # Remove state after use
+    del oauth_state_store[state]
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            # CMS Blue Button 2.0 requires Basic Auth for the token exchange
+            # and the code_verifier for PKCE
+            response = await client.post(
+                BLUEBUTTON_TOKEN_URL,
+                data={
+                    "grant_type": "authorization_code",
+                    "code": code,
+                    "redirect_uri": BLUEBUTTON_CALLBACK_URL,
+                    "code_verifier": code_verifier,
+                },
+                auth=(BLUEBUTTON_CLIENT_ID, BLUEBUTTON_CLIENT_SECRET)
+            )
+            
+            if response.status_code != 200:
+                # Log error and inform frontend
+                error_detail = response.text
+                print(f"Token exchange failed (Status {response.status_code}): {error_detail}")
+                # We can pass more info to the frontend if we want, but for now let's just log it here
+                return RedirectResponse(url=f"http://localhost:3000/dashboard?status=error&detail={urllib.parse.quote(error_detail)}")
+            
+            token_data = response.json()
+            # Store token_data for the session (simplistic demo approach)
+            # In a real app, this would be tied to a specific user session
+            oauth_state_store["current_token"] = token_data.get("access_token")
+            oauth_state_store["patient_id"] = token_data.get("patient")
+            
+            frontend_url = "http://localhost:3000/dashboard?status=connected"
+            return RedirectResponse(url=frontend_url)
+            
+        except Exception as e:
+            print(f"OAuth error: {str(e)}")
+            return RedirectResponse(url="http://localhost:3000/dashboard?status=error")
 
 
 def fhir_error(status_code: int, severity: str, code: str, diagnostics: str):
@@ -166,6 +301,31 @@ async def read_patient(
     db: Session = Depends(get_db)
 ) -> Patient:
     """Retrieve a Patient by ID."""
+    # Check if this is a Blue Button patient (starts with -)
+    if patient_id.startswith("-") and "current_token" in oauth_state_store:
+        async with httpx.AsyncClient() as client:
+            try:
+                # Fetch from BB2 Sandbox
+                bb2_response = await client.get(
+                    f"https://sandbox.bluebutton.cms.gov/v2/fhir/Patient/{patient_id}/",
+                    headers={"Authorization": f"Bearer {oauth_state_store['current_token']}"}
+                )
+                if bb2_response.status_code == 200:
+                    data = bb2_response.json()
+                    # Map BB2 format to our minimal Patient model if necessary
+                    return Patient(
+                        id=data.get("id"),
+                        resourceType="Patient",
+                        birthDate=data.get("birthDate"),
+                        gender=data.get("gender"),
+                        name=[{
+                            "family": n.get("family"),
+                            "given": n.get("given", [])
+                        } for n in data.get("name", [])]
+                    )
+            except Exception as e:
+                print(f"Error fetching from BB2: {e}")
+
     db_patient = db.query(DBPatient).filter(DBPatient.id == patient_id).first()
     if db_patient:
         return Patient.model_validate(db_patient)
@@ -202,6 +362,24 @@ async def search_observations(
     db: Session = Depends(get_db)
 ) -> Bundle:
     """Search for Observation resources."""
+    # Check if this is a Blue Button patient
+    p_id = patient.replace("Patient/", "") if patient else None
+    if p_id and p_id.startswith("-") and "current_token" in oauth_state_store:
+        async with httpx.AsyncClient() as client:
+            try:
+                # BB2 v2 uses ExplanationOfBenefit and Coverage mostly, 
+                # but it might have some Observation-like data or we can simulate it.
+                # Actually BB2 Sandbox has Observation resources too for some patients.
+                bb2_response = await client.get(
+                    f"https://sandbox.bluebutton.cms.gov/v2/fhir/Observation/",
+                    params={"patient": p_id},
+                    headers={"Authorization": f"Bearer {oauth_state_store['current_token']}"}
+                )
+                if bb2_response.status_code == 200:
+                    return Bundle(**bb2_response.json())
+            except Exception as e:
+                print(f"Error fetching observations from BB2: {e}")
+
     query = db.query(DBObservation)
 
     if patient:
@@ -252,6 +430,54 @@ async def search_observations(
         total=len(entries),
         entry=entries
     )
+
+
+@app.get("/fhir/Coverage", response_model=Bundle)
+async def search_coverage(
+    beneficiary: Optional[str] = Query(None, description="Beneficiary ID"),
+    db: Session = Depends(get_db)
+) -> Bundle:
+    """Search for Coverage resources."""
+    p_id = beneficiary.replace("Patient/", "") if beneficiary else None
+    if p_id and p_id.startswith("-") and "current_token" in oauth_state_store:
+        async with httpx.AsyncClient() as client:
+            try:
+                bb2_response = await client.get(
+                    f"https://sandbox.bluebutton.cms.gov/v2/fhir/Coverage/",
+                    params={"beneficiary": p_id},
+                    headers={"Authorization": f"Bearer {oauth_state_store['current_token']}"}
+                )
+                if bb2_response.status_code == 200:
+                    return Bundle(**bb2_response.json())
+            except Exception as e:
+                print(f"Error fetching coverage from BB2: {e}")
+
+    # Local storage doesn't have Coverage yet, return empty bundle
+    return Bundle(total=0, entry=[])
+
+
+@app.get("/fhir/ExplanationOfBenefit", response_model=Bundle)
+async def search_eob(
+    patient: Optional[str] = Query(None, description="Patient ID"),
+    db: Session = Depends(get_db)
+) -> Bundle:
+    """Search for ExplanationOfBenefit resources."""
+    p_id = patient.replace("Patient/", "") if patient else None
+    if p_id and p_id.startswith("-") and "current_token" in oauth_state_store:
+        async with httpx.AsyncClient() as client:
+            try:
+                bb2_response = await client.get(
+                    f"https://sandbox.bluebutton.cms.gov/v2/fhir/ExplanationOfBenefit/",
+                    params={"patient": p_id},
+                    headers={"Authorization": f"Bearer {oauth_state_store['current_token']}"}
+                )
+                if bb2_response.status_code == 200:
+                    return Bundle(**bb2_response.json())
+            except Exception as e:
+                print(f"Error fetching EOB from BB2: {e}")
+
+    # Local storage doesn't have EOB yet, return empty bundle
+    return Bundle(total=0, entry=[])
 
 
 @app.get("/fhir/Observation/{observation_id}", response_model=Observation)

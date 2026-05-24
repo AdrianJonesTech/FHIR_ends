@@ -1,9 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getPatient, Patient, getObservations, Observation } from '../api/fhirClient';
+import { 
+  getPatient, Patient, getObservations, Observation,
+  getCoverages, Coverage, getEOBs, ExplanationOfBenefit 
+} from '../api/fhirClient';
 import { 
   Activity, ArrowLeft, Calendar, User as UserIcon, Shield, Globe, Tag, 
-  History, Info, LineChart as ChartIcon, List
+  History, Info, LineChart as ChartIcon, List, CreditCard, Receipt
 } from 'lucide-react';
 import { 
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer 
@@ -14,9 +17,11 @@ const PatientDetails: React.FC = () => {
   const navigate = useNavigate();
   const [patient, setPatient] = useState<Patient | null>(null);
   const [observations, setObservations] = useState<Observation[]>([]);
+  const [coverages, setCoverages] = useState<Coverage[]>([]);
+  const [eobs, setEobs] = useState<ExplanationOfBenefit[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'summary' | 'clinical'>('summary');
+  const [activeTab, setActiveTab] = useState<'summary' | 'clinical' | 'billing'>('summary');
 
   useEffect(() => {
     if (id) {
@@ -27,12 +32,16 @@ const PatientDetails: React.FC = () => {
   const fetchData = async (patientId: string) => {
     setIsLoading(true);
     try {
-      const [patientData, obsData] = await Promise.all([
+      const [patientData, obsData, coverageData, eobData] = await Promise.all([
         getPatient(patientId),
-        getObservations(patientId)
+        getObservations(patientId),
+        getCoverages(patientId),
+        getEOBs(patientId)
       ]);
       setPatient(patientData);
       setObservations(obsData.entry?.map(e => e.resource as Observation) || []);
+      setCoverages(coverageData.entry?.map(e => e.resource as Coverage) || []);
+      setEobs(eobData.entry?.map(e => e.resource as ExplanationOfBenefit) || []);
     } catch (err) {
       console.error('Error fetching data:', err);
       setError('Failed to load patient record.');
@@ -105,6 +114,11 @@ const PatientDetails: React.FC = () => {
           <div>
             <h1 className="text-3xl font-bold text-gray-100 flex items-center">
               Patient Record: {patient.id}
+              {patient.id.startsWith('-') && (
+                <span className="ml-4 bg-blue-900/40 text-blue-400 text-xs px-3 py-1 rounded-full border border-blue-500/30 uppercase font-bold tracking-wider">
+                  Blue Button 2.0 Resource
+                </span>
+              )}
             </h1>
             <p className="text-gray-400 mt-2">Comprehensive view of FHIR Patient Resource</p>
           </div>
@@ -130,7 +144,18 @@ const PatientDetails: React.FC = () => {
               }`}
             >
               <History className="mr-2 h-4 w-4" />
-              Clinical History
+              Clinical
+            </button>
+            <button
+              onClick={() => setActiveTab('billing')}
+              className={`flex items-center px-4 py-2 rounded-md transition ${
+                activeTab === 'billing' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'text-gray-400 hover:text-gray-200'
+              }`}
+            >
+              <CreditCard className="mr-2 h-4 w-4" />
+              Billing
             </button>
           </div>
         </div>
@@ -214,7 +239,7 @@ const PatientDetails: React.FC = () => {
                   </p>
                 </div>
               </div>
-            ) : (
+            ) : activeTab === 'clinical' ? (
               <div className="space-y-6">
                 {/* Visual Trends */}
                 <div className="bg-gray-900 rounded-xl border border-gray-800 shadow-xl p-6">
@@ -318,6 +343,97 @@ const PatientDetails: React.FC = () => {
                           <tr>
                             <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
                               No observation records found.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                {/* Coverage Section */}
+                <div className="bg-gray-900 rounded-xl border border-gray-800 shadow-xl overflow-hidden">
+                  <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+                    <h3 className="text-lg font-semibold flex items-center text-gray-100">
+                      <Shield className="mr-2 h-5 w-5 text-blue-400" />
+                      Insurance Coverage
+                    </h3>
+                  </div>
+                  <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {coverages.map((cov) => (
+                      <div key={cov.id} className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <p className="text-xs text-gray-500 uppercase font-bold mb-1">Status</p>
+                            <span className="px-2 py-0.5 text-xs rounded-full bg-green-900/30 text-green-400 border border-green-500/20">
+                              {cov.status}
+                            </span>
+                          </div>
+                          <CreditCard className="h-5 w-5 text-gray-600" />
+                        </div>
+                        <div className="mt-4">
+                          <p className="text-sm font-medium text-gray-200">{cov.type?.text || 'Standard Coverage'}</p>
+                          <p className="text-xs text-gray-500 mt-1">ID: {cov.id}</p>
+                        </div>
+                        <div className="mt-4 pt-4 border-t border-gray-700">
+                          <p className="text-xs text-gray-400">Payor: {cov.payor?.[0]?.display || 'CMS Blue Button'}</p>
+                        </div>
+                      </div>
+                    ))}
+                    {coverages.length === 0 && (
+                      <div className="col-span-full py-8 text-center text-gray-500">
+                        No coverage information found.
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* EOB Section */}
+                <div className="bg-gray-900 rounded-xl border border-gray-800 shadow-xl overflow-hidden">
+                  <div className="px-6 py-4 border-b border-gray-800 flex items-center justify-between">
+                    <h3 className="text-lg font-semibold flex items-center text-gray-100">
+                      <Receipt className="mr-2 h-5 w-5 text-blue-400" />
+                      Claims History (EOB)
+                    </h3>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                      <thead>
+                        <tr className="bg-gray-800/50 text-gray-400 text-xs uppercase tracking-wider">
+                          <th className="px-6 py-3 font-semibold">Date</th>
+                          <th className="px-6 py-3 font-semibold">Type</th>
+                          <th className="px-6 py-3 font-semibold">Outcome</th>
+                          <th className="px-6 py-3 font-semibold text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-800">
+                        {eobs.map((eob) => (
+                          <tr key={eob.id} className="hover:bg-gray-800/30 transition">
+                            <td className="px-6 py-4 text-sm text-gray-300">
+                              {eob.created ? new Date(eob.created).toLocaleDateString() : 'N/A'}
+                            </td>
+                            <td className="px-6 py-4">
+                              <p className="text-sm font-medium text-gray-100">{eob.type?.coding?.[0]?.display || 'Claim'}</p>
+                              <p className="text-xs text-gray-500">ID: {eob.id}</p>
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`px-2 py-0.5 text-xs rounded-full border ${
+                                eob.outcome === 'complete' ? 'bg-green-900/30 text-green-400 border-green-500/20' : 'bg-yellow-900/30 text-yellow-400 border-yellow-500/20'
+                              }`}>
+                                {eob.outcome}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 text-right text-sm font-mono text-blue-400 font-bold">
+                              ${eob.total?.[0]?.amount?.value || '0.00'}
+                            </td>
+                          </tr>
+                        ))}
+                        {eobs.length === 0 && (
+                          <tr>
+                            <td colSpan={4} className="px-6 py-12 text-center text-gray-500">
+                              No claims history found.
                             </td>
                           </tr>
                         )}

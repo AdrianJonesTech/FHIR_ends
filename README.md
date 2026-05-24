@@ -6,6 +6,7 @@ A full-stack FHIR demo featuring a FastAPI backend and a React + TypeScript fron
 
 - **FHIR Backend**: FastAPI-based server supporting Patient and Practitioner resources.
 - **Modern Frontend**: React, TypeScript, Tailwind CSS, and Lucide icons.
+- **Blue Button 2.0 Integration**: Supports OAuth 2.0 flow for connecting to Medicare data.
 - **Interoperability**: Returns FHIR `Bundle` and `CapabilityStatement` resources.
 - **Standard Search**: Supports FHIR-native search parameters (`name`, `family`, `given`, `gender`).
 - **Containerized**: Fully orchestrated using Docker Compose.
@@ -74,3 +75,16 @@ docker-compose watch
 - `/frontend`: React + TypeScript frontend application.
 - `models.py`: FHIR-compliant Pydantic models.
 - `seed.py`: Database seeder script.
+
+## Blue Button 2.0 Configuration
+
+To enable the Blue Button 2.0 integration:
+
+1. Register your application at the [Blue Button Developer Portal](https://developer.bluebutton.cms.gov/).
+2. Set the Redirect URI to `http://localhost:8000/api/oauth/callback/`.
+3. Update `main.py` with your `BLUEBUTTON_CLIENT_ID` and `BLUEBUTTON_CLIENT_SECRET`, or set them as environment variables.
+   ```bash
+   export BLUEBUTTON_CLIENT_ID=your_id_here
+   export BLUEBUTTON_CLIENT_SECRET=your_secret_here
+   ```
+4. The application uses the sandbox environment by default (`https://sandbox.bluebutton.cms.gov/`).

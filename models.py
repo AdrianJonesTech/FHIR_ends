@@ -131,3 +131,30 @@ class Observation(BaseModel):
         "from_attributes": True,
         "populate_by_name": True
     }
+
+
+class Coverage(BaseModel):
+    """Stub FHIR Coverage resource."""
+    resourceType: str = Field("Coverage", pattern="^Coverage$")
+    id: Optional[str] = None
+    status: str
+    type: Optional[dict] = None
+    subscriber: Optional[dict] = None
+    beneficiary: dict
+    period: Optional[dict] = None
+    payor: List[dict]
+
+
+class ExplanationOfBenefit(BaseModel):
+    """Stub FHIR ExplanationOfBenefit resource."""
+    resourceType: str = Field("ExplanationOfBenefit", pattern="^ExplanationOfBenefit$")
+    id: Optional[str] = None
+    status: str
+    type: dict
+    use: str
+    patient: dict
+    created: str
+    insurer: dict
+    provider: dict
+    outcome: str
+    total: Optional[List[dict]] = None

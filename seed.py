@@ -44,6 +44,28 @@ def seed_data():
                 birthDate=date(1985, 6, 15),
                 gender="female",
                 name=[{"family": "Johnson", "given": ["Emily"]}]
+            ),
+            # Blue Button 2.0 Synthetic Beneficiaries
+            DBPatient(
+                id="-20140000000001",
+                resourceType="Patient",
+                birthDate=date(1970, 1, 1),
+                gender="male",
+                name=[{"family": "Golden", "given": ["Bene"]}]
+            ),
+            DBPatient(
+                id="-20140000000002",
+                resourceType="Patient",
+                birthDate=date(1982, 3, 24),
+                gender="female",
+                name=[{"family": "Green", "given": ["Bene"]}]
+            ),
+            DBPatient(
+                id="-20140000000003",
+                resourceType="Patient",
+                birthDate=date(1995, 11, 12),
+                gender="other",
+                name=[{"family": "Blue", "given": ["Bene"]}]
             )
         ]
         
